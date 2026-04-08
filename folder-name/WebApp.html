@@ -1,1 +1,468 @@
+<!-- File: WebApp.html -->
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
 
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f4f4f4;
+      color: #333;
+      margin: 0;
+      padding: 20px;
+    }
+
+    h2 { color: #444; }
+
+    .card {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+    }
+
+    input[type="text"],
+    input[type="password"],
+    input[type="date"],
+    input[type="email"],
+    input[type="number"],
+    select {
+      width: 25%;
+      padding: 10px;
+      margin: 10px 0;
+      border: 1px solid #ccc;
+      border-radius: 5px;
+    }
+
+    button {
+      background-color: #28a745;
+      color: white;
+      border: none;
+      padding: 10px 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      margin: 2px;
+    }
+
+    button:hover { background-color: #218838; }
+
+    button.danger {
+      background-color: #dc3545;
+    }
+
+    button.danger:hover { background-color: #b02a37; }
+
+    .message { margin: 10px 0; color: red; }
+
+    #appointmentList ul { list-style: none; padding: 0; }
+
+    #appointmentList li {
+      width: 75%;
+      background: #f9f9f9;
+      border: 1px solid #ddd;
+      padding: 10px;
+      margin: 5px 0;
+      border-radius: 5px;
+    }
+
+    #loadingSpinner {
+      text-align: center;
+      margin: 20px 0;
+      display: none;
+    }
+  </style>
+
+  <script>
+    // ─── State ────────────────────────────────────────────────────────────────
+    let appointments = [];
+    let currentUser  = '';
+    let editingKey   = null;
+
+    // ─── Init ─────────────────────────────────────────────────────────────────
+    window.onload = () => showSection('loginSection');
+
+    // ─── Section Navigation ───────────────────────────────────────────────────
+    const SECTIONS = [
+      'loginSection', 'signupSection', 'mainMenu',
+      'editAppointmentsSection', 'newAppointmentSection'
+    ];
+
+    function showSection(id) {
+      SECTIONS.forEach(s => {
+        document.getElementById(s).style.display = (s === id) ? 'block' : 'none';
+      });
+    }
+
+    // ─── Auth ─────────────────────────────────────────────────────────────────
+    function login() {
+      const username = document.getElementById('loginUsername').value.trim();
+      const password = document.getElementById('loginPassword').value;
+
+      google.script.run.withSuccessHandler(response => {
+        if (response.success) {
+          currentUser = username;
+          document.getElementById('currentUserName').textContent = response.name;
+          showSection('mainMenu');
+        } else {
+          setMessage('loginMessage', 'Invalid credentials. Please try again.');
+        }
+      }).login(username, password);
+    }
+
+    function signUp() {
+      const name     = document.getElementById('signupName').value.trim();
+      const email    = document.getElementById('signupEmail').value.trim();
+      const username = document.getElementById('signupUsername').value.trim();
+      const password = document.getElementById('signupPassword').value;
+
+      const emailRegex    = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const usernameRegex = /^\S+$/;
+      const passwordRegex = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d]+$/;
+
+      if (!emailRegex.test(email))    return setMessage('signupMessage', 'Please enter a valid email address.');
+      if (!usernameRegex.test(username)) return setMessage('signupMessage', 'Username must not contain spaces.');
+      if (!passwordRegex.test(password)) return setMessage('signupMessage', 'Password must contain letters and numbers, no spaces.');
+
+      google.script.run.withSuccessHandler(success => {
+        if (success) {
+          setMessage('signupMessage', 'Sign up successful! Please log in.');
+          showSection('loginSection');
+        } else {
+          setMessage('signupMessage', 'Username already taken.');
+        }
+      }).signUp(name, email, username, password);
+    }
+
+    // ─── Appointments: List ───────────────────────────────────────────────────
+    function showEditAppointments() {
+      closeModal();
+      showSection('editAppointmentsSection');
+      refreshAppointments();
+    }
+
+    function refreshAppointments() {
+      if (!currentUser) return;
+      document.getElementById('loadingSpinner').style.display = 'block';
+
+      google.script.run.withSuccessHandler(raw => {
+        document.getElementById('loadingSpinner').style.display = 'none';
+        appointments = JSON.parse(raw);
+        renderAppointmentList();
+      }).getUserAppointments(currentUser);
+    }
+
+    function renderAppointmentList() {
+      const container = document.getElementById('appointmentList');
+      container.innerHTML = '';
+
+      if (!appointments.length) {
+        container.innerHTML = '<p>No appointments available.</p>';
+        return;
+      }
+
+      const ul = document.createElement('ul');
+      appointments.forEach(appt => {
+        const li = document.createElement('li');
+        li.textContent = `${appt.date} - ${appt.time}: ${appt.hospital} with Dr. ${appt.doctor} (Reason: ${appt.reason})`;
+
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit';
+        editBtn.onclick = () => openEditModal(appt);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = 'Delete';
+        delBtn.className = 'danger';
+        delBtn.onclick = () => confirmDelete(appt.key);
+
+        li.append(editBtn, delBtn);
+        ul.appendChild(li);
+      });
+
+      container.appendChild(ul);
+    }
+
+    // ─── Appointments: Delete ─────────────────────────────────────────────────
+    function confirmDelete(key) {
+      if (!confirm('Are you sure you want to delete this appointment?')) return;
+      appointments = appointments.filter(a => a.key !== key);
+      google.script.run.withSuccessHandler(() => renderAppointmentList())
+                        .updateAppointmentList(appointments);
+    }
+
+    // ─── Appointments: New ────────────────────────────────────────────────────
+    function newAppointment() {
+      showSection('newAppointmentSection');
+    }
+
+    function submitAppointment() {
+      const hospital = document.getElementById('hospital').value.trim();
+      const doctor   = document.getElementById('doctor').value.trim();
+      const date     = document.getElementById('date').value;
+      const hour     = document.getElementById('hour').value;
+      const minutes  = document.getElementById('minutes').value;
+      const ampm     = document.getElementById('ampm').value;
+      const reason   = document.getElementById('reason').value.trim();
+      const msgDiv   = document.getElementById('appointmentMessage');
+
+      msgDiv.textContent = '';
+
+      if (!hospital || !doctor || !date || !hour || !minutes || !ampm || !reason) {
+        return setMessage('appointmentMessage', 'Please fill in all required fields.');
+      }
+
+      if (!isFutureDateValid(date, hour, minutes, ampm)) {
+        return setMessage('appointmentMessage', 'Appointment must be at least 24 hours in the future.');
+      }
+
+      appointments.push({
+        key: generateKey(),
+        hospital, doctor, date,
+        time: `${hour}:${minutes} ${ampm}`,
+        reason,
+        user: currentUser
+      });
+
+      google.script.run.withSuccessHandler(() => {
+        document.getElementById('appointmentForm').reset();
+        showEditAppointments();
+      }).updateAppointmentList(appointments);
+    }
+
+    // ─── Appointments: Edit Modal ─────────────────────────────────────────────
+    function openEditModal(appt) {
+      document.getElementById('editHospital').value = appt.hospital;
+      document.getElementById('editDoctor').value   = appt.doctor;
+      document.getElementById('editDate').value     = appt.date;
+      document.getElementById('editReason').value   = appt.reason;
+
+      const [hour, rest] = appt.time.split(':');
+      const [minute, amPm] = rest.split(' ');
+      document.getElementById('editHour').value   = hour;
+      document.getElementById('editMinute').value = minute;
+      document.getElementById('editAmPm').value   = amPm;
+
+      editingKey = appt.key;
+      document.getElementById('editModal').style.display = 'block';
+    }
+
+    function closeModal() {
+      document.getElementById('editModal').style.display = 'none';
+      document.getElementById('editAppointmentForm').reset();
+      editingKey = null;
+    }
+
+    function submitEditAppointment() {
+      const hospital = document.getElementById('editHospital').value.trim();
+      const doctor   = document.getElementById('editDoctor').value.trim();
+      const date     = document.getElementById('editDate').value;
+      const hour     = document.getElementById('editHour').value;
+      const minute   = document.getElementById('editMinute').value;  // Fixed: was 'minutes'
+      const amPm     = document.getElementById('editAmPm').value;
+      const reason   = document.getElementById('editReason').value.trim();
+
+      if (!hospital || !doctor || !date || !hour || !minute || !amPm || !reason) {
+        return setMessage('editAppointmentMessage', 'Please fill in all required fields.');
+      }
+
+      if (!isFutureDateValid(date, hour, minute, amPm)) {
+        return setMessage('editAppointmentMessage', 'Appointment must be at least 24 hours in the future.');
+      }
+
+      const updated = { key: editingKey, hospital, doctor, date, time: `${hour}:${minute} ${amPm}`, reason, user: currentUser };
+      const idx = appointments.findIndex(a => a.key === editingKey);
+      if (idx > -1) appointments[idx] = updated;
+
+      google.script.run
+        .withSuccessHandler(() => {
+          closeModal();
+          renderAppointmentList();
+        })
+        .withFailureHandler(() => setMessage('editAppointmentMessage', 'Failed to update appointment.'))
+        .updateAppointmentList(appointments);
+    }
+
+    // ─── Hospital Search ──────────────────────────────────────────────────────
+    function searchNearbyHospitals() {
+      const address  = document.getElementById('address').value.trim();
+      const listDiv  = document.getElementById('hospitalList');
+      listDiv.innerHTML = '';
+
+      if (!address) return (listDiv.textContent = 'Please enter an address.');
+
+      google.script.run.withSuccessHandler(hospitals => {
+        if (!hospitals || !hospitals.length) {
+          listDiv.textContent = 'No hospitals found.';
+          return;
+        }
+        const ul = document.createElement('ul');
+        hospitals.forEach(h => {
+          const li = document.createElement('li');
+          li.textContent = h.name;
+          li.style.cursor = 'pointer';
+          li.onclick = () => {
+            document.getElementById('hospital').value = h.name;
+            listDiv.innerHTML = '';
+          };
+          ul.appendChild(li);
+        });
+        listDiv.appendChild(ul);
+      }).findNearbyHospitals(address);
+    }
+
+    // ─── Stub Placeholders ────────────────────────────────────────────────────
+    function editPrescriptions() { alert('Prescriptions: coming soon.'); }
+    function editPatients()      { alert('Patients: coming soon.'); }
+    function searchAppointments(){ alert('Search: coming soon.'); }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+    function setMessage(id, msg) {
+      document.getElementById(id).textContent = msg;
+    }
+
+    function generateKey() {
+      return 'appt-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+    }
+
+    function isFutureDateValid(date, hour, minutes, ampm) {
+      let h = parseInt(hour, 10);
+      h += (ampm === 'PM' && h !== 12) ? 12 : (ampm === 'AM' && h === 12 ? -12 : 0);
+      const apptDate = new Date(date);
+      apptDate.setHours(h, parseInt(minutes, 10), 0, 0);
+      return apptDate >= new Date(Date.now() + 24 * 60 * 60 * 1000);
+    }
+
+    // Build hour <option> tags dynamically (avoids 12 hardcoded lines)
+    function buildHourOptions(selectId) {
+      const sel = document.getElementById(selectId);
+      for (let i = 1; i <= 12; i++) {
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = i;
+        sel.appendChild(opt);
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      buildHourOptions('hour');
+      buildHourOptions('editHour');
+    });
+  </script>
+</head>
+<body>
+
+  <!-- Login -->
+  <div id="loginSection" class="card" style="display:none;">
+    <h2>Login</h2>
+    <div id="loginMessage" class="message"></div>
+    <label>Username: <input type="text" id="loginUsername" required></label><br>
+    <label>Password: <input type="password" id="loginPassword" required></label><br>
+    <button onclick="login()">Login</button>
+    <button onclick="showSection('signupSection')">Sign Up</button>
+  </div>
+
+  <!-- Sign Up -->
+  <div id="signupSection" class="card" style="display:none;">
+    <h2>Sign Up</h2>
+    <div id="signupMessage" class="message"></div>
+    <label>Name:     <input type="text"     id="signupName"     required></label><br>
+    <label>Email:    <input type="email"    id="signupEmail"    required></label><br>
+    <label>Username: <input type="text"     id="signupUsername" required></label><br>
+    <label>Password: <input type="password" id="signupPassword" required></label><br>
+    <button onclick="signUp()">Sign Up</button>
+    <button onclick="showSection('loginSection')">Back to Login</button>
+  </div>
+
+  <!-- Main Menu -->
+  <div id="mainMenu" class="card" style="display:none;">
+    <h2>Welcome, <span id="currentUserName"></span>!</h2>
+    <button onclick="showEditAppointments()">Edit Appointments</button>
+    <button onclick="editPrescriptions()">Edit Prescriptions</button>
+    <button onclick="editPatients()">Edit Patients</button>
+  </div>
+
+  <!-- Appointments List -->
+  <div id="editAppointmentsSection" class="card" style="display:none;">
+    <h2>Edit Appointments</h2>
+    <button onclick="showSection('mainMenu')">Back to Main Menu</button>
+    <button onclick="newAppointment()">New Appointment</button>
+    <button onclick="searchAppointments()">Search</button>
+    <button onclick="refreshAppointments()">Refresh</button>
+
+    <div id="loadingSpinner">
+      <h3>Loading...</h3>
+      <img src="https://media1.tenor.com/m/o8m3bKTsifUAAAAC/hold-on.gif" alt="Loading..." width="100">
+    </div>
+    <div id="appointmentList"></div>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="card" style="display:none;">
+      <h2>Edit Appointment</h2>
+      <div id="editAppointmentMessage" class="message"></div>
+      <form id="editAppointmentForm">
+        <label>Hospital: <input type="text"   id="editHospital" required></label><br>
+        <label>Doctor:   <input type="text"   id="editDoctor"   required></label><br>
+        <label>Date:     <input type="date"   id="editDate"     required></label><br>
+        <label>Hour:
+          <select id="editHour" required>
+            <option value="">Hour</option>
+          </select>
+        </label>
+        <label>Minutes:
+          <input type="number" id="editMinute" min="0" max="59" required>
+        </label>
+        <label>AM/PM:
+          <select id="editAmPm" required>
+            <option value="AM">AM</option>
+            <option value="PM">PM</option>
+          </select>
+        </label><br>
+        <label>Reason: <input type="text" id="editReason" required></label><br>
+        <button type="button" onclick="submitEditAppointment()">Update Appointment</button>
+        <button type="button" onclick="closeModal()">Cancel</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- New Appointment -->
+  <div id="newAppointmentSection" class="card" style="display:none;">
+    <h2>New Appointment</h2>
+    <div id="appointmentMessage" class="message"></div>
+    <form id="appointmentForm">
+      <label>Address: <input type="text" id="address"></label>
+      <button type="button" onclick="searchNearbyHospitals()">Find Nearby Hospitals</button>
+      <div id="hospitalList" class="message"></div><br>
+
+      <label>Hospital: <input type="text" id="hospital" required></label><br>
+      <label>Doctor:   <input type="text" id="doctor"   required></label><br>
+      <label>Date:     <input type="date" id="date"     required></label><br>
+
+      <label>Time:
+        <select id="hour" required>
+          <option value="">Hour</option>
+        </select>
+        <select id="minutes" required>
+          <option value="">Min</option>
+          <option value="00">00</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+          <option value="45">45</option>
+        </select>
+        <select id="ampm" required>
+          <option value="">AM/PM</option>
+          <option value="AM">AM</option>
+          <option value="PM">PM</option>
+        </select>
+      </label><br>
+
+      <label>Reason: <input type="text" id="reason" required></label><br>
+      <button type="button" onclick="submitAppointment()">Submit Appointment</button>
+      <button type="button" onclick="showEditAppointments()">Cancel</button>
+    </form>
+  </div>
+
+</body>
+</html>
